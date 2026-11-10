@@ -36,7 +36,7 @@ const camera = new THREE.PerspectiveCamera(
     0.1,
     1000,
 );
-camera.position.set(0.2409416257918322, 2.428480666771642, 3.0507705574946307);
+camera.position.set(0.2409416257918322, 3.028480666771642, 2.5507705574946307);
 scene.add(camera);
 
 //? Renderer
@@ -169,7 +169,7 @@ scene.add(points);
 
 //? Setup The Controls
 const controls = new OrbitControls(camera, canvas);
-controls.target.set(-0.09774995317992423, 1.1673510401321705, -1.0607393923537811);
+controls.target.set(-0.09774995317992423, 1.4673510401321705, -1.0607393923537811);
 controls.enableDamping = true;
 
 //? Animate
