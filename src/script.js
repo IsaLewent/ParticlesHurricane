@@ -53,7 +53,7 @@ renderer.render(scene, camera);
  * GPGPU
  */
 //? GPU Setup
-const gpgpuSize = 256;
+const gpgpuSize = 128; // 128x128 = 16384 particles
 const gpuCompute = new GPUComputationRenderer(gpgpuSize, gpgpuSize, renderer);
 
 //? Create a texture to hold the particle positions
