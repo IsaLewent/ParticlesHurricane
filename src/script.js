@@ -25,7 +25,7 @@ document.body.appendChild(stats.dom);
 //? 2. Tweakpane Kontrol Paneli
 const pane = new Pane({
     title: "Tornado GPGPU Ayarları",
-    expanded: true,
+    expanded: false,
 });
 
 //? Canvas & Scene
