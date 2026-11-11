@@ -7,14 +7,20 @@ import gpgpuParticlesFragmentShader from "./shaders/gpgpu/particles.glsl";
 
 import { GPUComputationRenderer } from 'three/addons/misc/GPUComputationRenderer.js';
 import GUI from "lil-gui";
+import { mix } from "three/tsl";
 
 function lerp(a, b, t) {
     return a + (b - a) * t;
 }
 
-
 //? Debug GUI
-const gui = new GUI();
+const gui = new GUI({
+    closeFolders: true,
+});
+gui.close();
+
+const tornadoFolder = gui.addFolder("Tornado Settings");
+tornadoFolder.close();
 
 //? Canvas
 const canvas = document.querySelector("canvas.webgl");
@@ -64,36 +70,39 @@ const positionSize = positionTexture.image.data.length;
 const aRandomHeight = new Float32Array(positionSize / 4);
 
 //? Fill the position texture with random values
-const maxHeight = 10.0;
-const minRadius = 0.0;
-const maxRadius = 8.0;
+const maxHeight = 9.5;
+const minRadius = 0.4;
+const maxRadius = 100.0;
+let innerFactor = 1.15; // Inner factor for radius calculation
+
+const uMaxHeight = 10.0;
+const uMinRadius = 0.08;
+const uMaxRadius = 9.75;
 
 for (let i = 0; i < positionSize; i += 4) {
     let randomHeight = Math.random() * 2.0; // y
-    const y = Math.random() * maxHeight + randomHeight; // y
+    let y = Math.random() * maxHeight + randomHeight; // y
     const heightProgress = y / maxHeight;
 
     // O yükseklikteki DIŞ KABUK (maksimum) yarıçapı
-    const outerRadius = (minRadius + (maxRadius - minRadius) * Math.pow(heightProgress, 2.0));
+    const outerRadius = lerp(minRadius, maxRadius, Math.pow(heightProgress, 2.2));
 
     // 0.0 (tam merkez) ile 1.0 (dış kabuk) arası bir hacim derinliği (inner factor) belirle
-    const innerFactor = Math.sqrt(Math.random());
 
     // Gerçek yarıçap, dış kabuk ile bu derinliğin çarpımıdır
-    const radius = outerRadius * innerFactor * 0.65;
+    const radius = outerRadius * 0.65;
 
     const theta = Math.random() * Math.PI * 2.0;
 
     let x = Math.cos(theta) * radius;    // x
     let z = Math.sin(theta) * radius;    // z
 
-
-    positionTexture.image.data[i + 0] = x * 0.3; // x
+    positionTexture.image.data[i + 0] = x * 0.01; // x
     positionTexture.image.data[i + 1] = y * 0.3; // y
-    positionTexture.image.data[i + 2] = z * 0.3; // z
-    positionTexture.image.data[i + 3] = innerFactor; // w
+    positionTexture.image.data[i + 2] = z * 0.01; // z
+    positionTexture.image.data[i + 3] = Math.random() * 2.0 + 2.0; // w
 
-    aRandomHeight[i / 4] = Math.random() * 2.0; // Store the random height for later use
+    aRandomHeight[i / 4] = Math.random(); // Store the random height for later use
 }
 
 //? Create a variable to hold the position texture and set its dependencies
@@ -101,9 +110,25 @@ const positionVariable = gpuCompute.addVariable("texturePosition", gpgpuParticle
 gpuCompute.setVariableDependencies(positionVariable, [positionVariable]);
 positionVariable.material.uniforms.time = { value: 0.0 };
 positionVariable.material.uniforms.delta = { value: 0.0 };
-positionVariable.material.uniforms.uMinRadius = { value: minRadius };
-positionVariable.material.uniforms.uMaxRadius = { value: maxRadius };
-positionVariable.material.uniforms.uMaxHeight = { value: maxHeight };
+positionVariable.material.uniforms.baseParticlesTexture = { value: positionTexture };
+positionVariable.material.uniforms.uMinRadius = { value: uMinRadius };
+positionVariable.material.uniforms.uMaxRadius = { value: uMaxRadius };
+positionVariable.material.uniforms.uMaxHeight = { value: uMaxHeight };
+positionVariable.material.uniforms.innerFactor = { value: innerFactor };
+positionVariable.material.uniforms.noiseFreq = { value: 1.125 };
+positionVariable.material.uniforms.noiseStrength = { value: 0.21 };
+positionVariable.material.uniforms.uRotationSpeed = { value: 0.3 };
+positionVariable.material.uniforms.uTimeStrength = { value: 1.0 };
+
+//? GUI
+tornadoFolder.add(positionVariable.material.uniforms.uMinRadius, "value").min(0.0).max(5.0).step(0.01).name("Min Radius");
+tornadoFolder.add(positionVariable.material.uniforms.uMaxRadius, "value").min(0.0).max(10.0).step(0.01).name("Max Radius");
+tornadoFolder.add(positionVariable.material.uniforms.uMaxHeight, "value").min(0.0).max(10.0).step(0.01).name("Max Height");
+tornadoFolder.add(positionVariable.material.uniforms.innerFactor, "value").min(0.0).max(4.0).step(0.01).name("Inner Factor");
+tornadoFolder.add(positionVariable.material.uniforms.noiseFreq, "value").min(0.1).max(10.0).step(0.01).name("Noise Frequency");
+tornadoFolder.add(positionVariable.material.uniforms.noiseStrength, "value").min(0.0).max(1.0).step(0.01).name("Noise Strength");
+tornadoFolder.add(positionVariable.material.uniforms.uRotationSpeed, "value").min(0.1).max(10.0).step(0.01).name("Rotation Speed");
+tornadoFolder.add(positionVariable.material.uniforms.uTimeStrength, "value").min(0.1).max(10.0).step(0.01).name("Time Strength");
 
 //? Initialize the GPU computation renderer
 const err = gpuCompute.init();
@@ -160,7 +185,7 @@ const material = new THREE.ShaderMaterial({
 });
 
 //? GUI Debug
-gui.add(material.uniforms.uSize, "value").min(1).max(20).step(0.01).name("Particle Size");
+gui.add(material.uniforms.uSize, "value").min(1).max(50).step(0.01).name("Particle Size");
 
 //? Create a points object to render the particles
 const points = new THREE.Points(geometry, material);
@@ -181,9 +206,10 @@ const tick = () => {
 
     //? Animate Objects
     clock.update();
-    const elapsedTime = clock.getElapsed();
+    let elapsedTime = clock.getElapsed();
     let deltaTime = clock.getDelta();
     deltaTime = Math.min(deltaTime, 0.1); // Limit delta time to avoid large jumps
+    elapsedTime = Math.min(elapsedTime, 1000); // Limit elapsed time to avoid large jumps
 
     //? Update the GPU computation
     positionVariable.material.uniforms.time.value = elapsedTime;
@@ -193,9 +219,7 @@ const tick = () => {
     // ? Update the particle positions from the GPU computation
     material.uniforms.texturePosition.value = gpuCompute.getCurrentRenderTarget(positionVariable).texture;
     material.uniforms.uTime.value = elapsedTime;
-    material.uniforms.uTime.value = deltaTime;
 
-    console.log();
 
     //? Render
     renderer.render(scene, camera);

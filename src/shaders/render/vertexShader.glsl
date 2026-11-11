@@ -13,9 +13,15 @@ void main() {
     //? Model Position 
     vec4 newPosition = texture2D(texturePosition, referenceUV);
 
+    // Time angle
+    float dynamicTime = (uTime * 0.5) + sin(uTime * 0.05) * 2.5; // Adjust the multiplier for speed
+    float angle = atan(newPosition.x, newPosition.z);
+    float angleOffset = (sin(angle + dynamicTime)) * 0.5 + 0.5; // 2 * PI
+
     vec4 modelPosiiton = modelMatrix * vec4(newPosition.xyz, 1.0);
     vec4 viewPosition = viewMatrix * modelPosiiton;
     vec4 projectedPosition = projectionMatrix * viewPosition;
+
     
     // Final Position
     gl_Position = projectedPosition;
@@ -26,5 +32,5 @@ void main() {
 
     // Varyingsc
     vUv = referenceUV;
-    vColor = vec3(1.0);
+    vColor = vec3(1.0); // Color based on height offset
 }
