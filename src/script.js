@@ -1,48 +1,47 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { GPUComputationRenderer } from "three/addons/misc/GPUComputationRenderer.js";
+import { Pane } from "tweakpane";
+import Stats from "stats.js";
+import gsap from "gsap";
 
 import vertexShader from "./shaders/render/vertexShader.glsl";
 import fragmentShader from "./shaders/render/fragmentShader.glsl";
 import gpgpuParticlesFragmentShader from "./shaders/gpgpu/particles.glsl";
 
-import { GPUComputationRenderer } from 'three/addons/misc/GPUComputationRenderer.js';
-import GUI from "lil-gui";
-import { mix } from "three/tsl";
-
 function lerp(a, b, t) {
     return a + (b - a) * t;
 }
 
-//? Debug GUI
-const gui = new GUI({
-    closeFolders: true,
+//? 1. Stats.js FPS Sayacı (Sol Üst Köşe)
+const stats = new Stats();
+stats.showPanel(0); // 0: fps, 1: ms, 2: mb
+stats.dom.style.position = "fixed";
+stats.dom.style.top = "12px";
+stats.dom.style.left = "12px";
+stats.dom.style.zIndex = "100";
+document.body.appendChild(stats.dom);
+
+//? 2. Tweakpane Kontrol Paneli
+const pane = new Pane({
+    title: "Tornado GPGPU Ayarları",
+    expanded: true,
 });
-gui.close();
 
-const tornadoFolder = gui.addFolder("Tornado Settings");
-tornadoFolder.close();
-
-//? Canvas
+//? Canvas & Scene
 const canvas = document.querySelector("canvas.webgl");
-
-//? Scene
 const scene = new THREE.Scene();
 
-//? Sizes
 const sizes = {
     width: window.innerWidth,
     height: window.innerHeight,
 };
 
 //? Camera
-const aspectRatio = sizes.width / sizes.height;
-const camera = new THREE.PerspectiveCamera(
-    75,
-    aspectRatio,
-    0.1,
-    1000,
-);
-camera.position.set(0.2409416257918322, 3.028480666771642, 2.5507705574946307);
+const camera = new THREE.PerspectiveCamera(75, sizes.width / sizes.height, 0.1, 1000);
+const finalCameraPos = new THREE.Vector3(0.24, 2.65, 3.45);
+const finalTargetPos = new THREE.Vector3(0.0, 1.35, 0.0);
+camera.position.copy(finalCameraPos);
 scene.add(camera);
 
 //? Renderer
@@ -50,203 +49,377 @@ const renderer = new THREE.WebGLRenderer({
     canvas: canvas,
     antialias: true,
 });
-
 renderer.setSize(sizes.width, sizes.height);
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-renderer.render(scene, camera);
+
+//? Zemin Referans Izgarası
+const groundGrid = new THREE.GridHelper(6, 24, 0x334155, 0x1e293b);
+groundGrid.visible = false;
+groundGrid.position.y = 0.0;
+groundGrid.material.transparent = true;
+groundGrid.material.opacity = 0.35;
+scene.add(groundGrid);
 
 /**
- * GPGPU
+ * GPGPU Kurulumu
  */
-//? GPU Setup
-const gpgpuSize = 128; // 128x128 = 16384 particles
+const gpgpuSize = 128; // 128x128 = 16.384 parçacık
 const gpuCompute = new GPUComputationRenderer(gpgpuSize, gpgpuSize, renderer);
 
-//? Create a texture to hold the particle positions
 const positionTexture = gpuCompute.createTexture();
 const positionSize = positionTexture.image.data.length;
+const particleCount = gpgpuSize * gpgpuSize;
 
-//? Random Height each particle
-const aRandomHeight = new Float32Array(positionSize / 4);
+const aRandomHeight = new Float32Array(particleCount);
 
-//? Fill the position texture with random values
 const maxHeight = 9.5;
 const minRadius = 0.4;
 const maxRadius = 100.0;
-let innerFactor = 1.15; // Inner factor for radius calculation
+const innerFactor = 1.15;
 
+// Kullanıcının özelleştirdiği başlangıç parametreleri korundu
 const uMaxHeight = 10.0;
 const uMinRadius = 0.08;
 const uMaxRadius = 9.75;
+const initialInnerHollow = 0.41;
+const initialShellThickness = 0.67;
 
 for (let i = 0; i < positionSize; i += 4) {
-    let randomHeight = Math.random() * 2.0; // y
-    let y = Math.random() * maxHeight + randomHeight; // y
-    const heightProgress = y / maxHeight;
+    const idx = i / 4;
+    const rndTop = Math.random();
+    const particleMaxH = maxHeight * (0.75 + rndTop * 0.55);
+    const y = Math.pow(Math.random(), 1.15) * particleMaxH;
+    const heightProgress = Math.min(1.0, y / maxHeight);
 
-    // O yükseklikteki DIŞ KABUK (maksimum) yarıçapı
     const outerRadius = lerp(minRadius, maxRadius, Math.pow(heightProgress, 2.2));
-
-    // 0.0 (tam merkez) ile 1.0 (dış kabuk) arası bir hacim derinliği (inner factor) belirle
-
-    // Gerçek yarıçap, dış kabuk ile bu derinliğin çarpımıdır
-    const radius = outerRadius * 0.65;
-
+    const shellDepth = initialInnerHollow + Math.random() * initialShellThickness;
+    const radius = outerRadius * shellDepth;
     const theta = Math.random() * Math.PI * 2.0;
 
-    let x = Math.cos(theta) * radius;    // x
-    let z = Math.sin(theta) * radius;    // z
+    const x = Math.cos(theta) * radius;
+    const z = Math.sin(theta) * radius;
 
-    positionTexture.image.data[i + 0] = x * 0.01; // x
-    positionTexture.image.data[i + 1] = y * 0.3; // y
-    positionTexture.image.data[i + 2] = z * 0.01; // z
-    positionTexture.image.data[i + 3] = Math.random() * 2.0 + 2.0; // w
+    positionTexture.image.data[i + 0] = x * 0.01;
+    positionTexture.image.data[i + 1] = y * 0.3;
+    positionTexture.image.data[i + 2] = z * 0.01;
+    positionTexture.image.data[i + 3] = Math.random() * 2.5 + 1.5; // Yaşam süresi (w)
 
-    aRandomHeight[i / 4] = Math.random(); // Store the random height for later use
+    aRandomHeight[idx] = rndTop;
 }
 
-//? Create a variable to hold the position texture and set its dependencies
-const positionVariable = gpuCompute.addVariable("texturePosition", gpgpuParticlesFragmentShader, positionTexture);
+const positionVariable = gpuCompute.addVariable(
+    "texturePosition",
+    gpgpuParticlesFragmentShader,
+    positionTexture
+);
 gpuCompute.setVariableDependencies(positionVariable, [positionVariable]);
-positionVariable.material.uniforms.time = { value: 0.0 };
-positionVariable.material.uniforms.delta = { value: 0.0 };
-positionVariable.material.uniforms.baseParticlesTexture = { value: positionTexture };
-positionVariable.material.uniforms.uMinRadius = { value: uMinRadius };
-positionVariable.material.uniforms.uMaxRadius = { value: uMaxRadius };
-positionVariable.material.uniforms.uMaxHeight = { value: uMaxHeight };
-positionVariable.material.uniforms.innerFactor = { value: innerFactor };
-positionVariable.material.uniforms.noiseFreq = { value: 1.125 };
-positionVariable.material.uniforms.noiseStrength = { value: 0.21 };
-positionVariable.material.uniforms.uRotationSpeed = { value: 0.3 };
-positionVariable.material.uniforms.uTimeStrength = { value: 1.0 };
 
-//? GUI
-tornadoFolder.add(positionVariable.material.uniforms.uMinRadius, "value").min(0.0).max(5.0).step(0.01).name("Min Radius");
-tornadoFolder.add(positionVariable.material.uniforms.uMaxRadius, "value").min(0.0).max(10.0).step(0.01).name("Max Radius");
-tornadoFolder.add(positionVariable.material.uniforms.uMaxHeight, "value").min(0.0).max(10.0).step(0.01).name("Max Height");
-tornadoFolder.add(positionVariable.material.uniforms.innerFactor, "value").min(0.0).max(4.0).step(0.01).name("Inner Factor");
-tornadoFolder.add(positionVariable.material.uniforms.noiseFreq, "value").min(0.1).max(10.0).step(0.01).name("Noise Frequency");
-tornadoFolder.add(positionVariable.material.uniforms.noiseStrength, "value").min(0.0).max(1.0).step(0.01).name("Noise Strength");
-tornadoFolder.add(positionVariable.material.uniforms.uRotationSpeed, "value").min(0.1).max(10.0).step(0.01).name("Rotation Speed");
-tornadoFolder.add(positionVariable.material.uniforms.uTimeStrength, "value").min(0.1).max(10.0).step(0.01).name("Time Strength");
+const uniforms = positionVariable.material.uniforms;
+uniforms.time = { value: 0.0 };
+uniforms.delta = { value: 0.0 };
+uniforms.baseParticlesTexture = { value: positionTexture };
+uniforms.uMinRadius = { value: uMinRadius };
+uniforms.uMaxRadius = { value: uMaxRadius };
+uniforms.uMaxHeight = { value: uMaxHeight };
+uniforms.innerFactor = { value: innerFactor };
+uniforms.noiseFreq = { value: 1.125 };
+uniforms.noiseStrength = { value: 0.05 };
+uniforms.uRotationSpeed = { value: 0.48 };
+uniforms.uTimeStrength = { value: 1.0 };
 
-//? Initialize the GPU computation renderer
+// Alt Boru Zemin Gezinme Uniformları (Kullanıcı ayarları korundu)
+uniforms.uWanderRadius = { value: 1.23 };
+uniforms.uWanderSpeed = { value: 1.21 };
+uniforms.uBendPower = { value: 5.0 };
+uniforms.uWhipLag = { value: 3.9 };
+uniforms.uUpdraftSpeed = { value: 3.6 };
+uniforms.uDebrisFlare = { value: 0.35 };
+uniforms.uGroundTarget = { value: new THREE.Vector2(0, 0) };
+uniforms.uUseMouseTarget = { value: 0.0 };
+
+// Hız, Spawn İvmesi, Tepe Dağılımı ve İç Boşluk Uniformları
+uniforms.uTopSlowdown = { value: 0.62 };
+uniforms.uRandomSpeedVar = { value: 1.0 };
+uniforms.uSpawnBurst = { value: 2.0 };
+uniforms.uTopHeightJitter = { value: 0.35 };
+uniforms.uInnerHollow = { value: initialInnerHollow };
+uniforms.uShellThickness = { value: initialShellThickness };
+
 const err = gpuCompute.init();
 if (err !== null) {
     console.error(err);
 }
 
 /**
- * Points geometry and material
+ * Parçacık Geometrisi ve Materyali
  */
-//? Create a buffer geometry to hold the particle positions and reference UVs
-const particleCount = gpgpuSize * gpgpuSize;
 const geometry = new THREE.BufferGeometry();
 const positions = new Float32Array(particleCount * 3);
-const referenceUVs = new Float32Array(particleCount * 3);
+const referenceUVs = new Float32Array(particleCount * 2);
 
-//? Fill the positions and reference UVs
 for (let i = 0; i < particleCount; i++) {
-    let i3 = i * 3;
-    let i2 = i * 2;
+    const i3 = i * 3;
+    const i2 = i * 2;
 
-    // Initial Position
-    positions[i3 + 0] = 0; // x
-    positions[i3 + 1] = 0; // y
-    positions[i3 + 2] = 0; // z
+    positions[i3 + 0] = 0;
+    positions[i3 + 1] = 0;
+    positions[i3 + 2] = 0;
 
-    // Reference UVs
-    let x = (i % gpgpuSize) / gpgpuSize; // u
-    let y = Math.floor(i / gpgpuSize) / gpgpuSize; // v
-
-    referenceUVs[i2 + 0] = x;
-    referenceUVs[i2 + 1] = y;
-
+    referenceUVs[i2 + 0] = (i % gpgpuSize) / gpgpuSize;
+    referenceUVs[i2 + 1] = Math.floor(i / gpgpuSize) / gpgpuSize;
 }
 
-//? Set the attributes for the geometry
 geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
 geometry.setAttribute("referenceUV", new THREE.BufferAttribute(referenceUVs, 2));
 geometry.setAttribute("randomHeight", new THREE.BufferAttribute(aRandomHeight, 1));
 
-//? Create a shader material to render the particles
 const material = new THREE.ShaderMaterial({
     vertexShader: vertexShader,
     fragmentShader: fragmentShader,
     uniforms: {
         texturePosition: { value: null },
-        uSize: new THREE.Uniform(5.0),
-        uTime: { value: null },
+        uSize: new THREE.Uniform(5.5),
+        uTime: { value: 0.0 },
         uPixelRatio: { value: Math.min(window.devicePixelRatio, 2) },
+        uMaxHeight: { value: uMaxHeight },
+        uTopHeightJitter: { value: 0.5 },
+        uColorMode: { value: 1.0 },
+        uIntroProgress: { value: 0.0 },
     },
     transparent: true,
     depthWrite: false,
     blending: THREE.AdditiveBlending,
 });
 
-//? GUI Debug
-gui.add(material.uniforms.uSize, "value").min(1).max(50).step(0.01).name("Particle Size");
-
-//? Create a points object to render the particles
 const points = new THREE.Points(geometry, material);
-points.frustumCulled = false; // Disable frustum culling for the points
+points.frustumCulled = false;
 scene.add(points);
 
-//? Setup The Controls
+//? OrbitControls
 const controls = new OrbitControls(camera, canvas);
-controls.target.set(-0.09774995317992423, 1.4673510401321705, -1.0607393923537811);
+controls.target.copy(finalTargetPos);
 controls.enableDamping = true;
 
-//? Animate
-const clock = new THREE.Timer();
+/**
+ * GSAP Kamera Eğrisi (Camera Curve Path) ve Alttan Yukarıya Tornado Oluşum Animasyonu
+ * Çizimdeki J/L-şekilli yumuşak kamera yörüngesini CatmullRomCurve3 ile tanımlar.
+ */
+const cameraCurvePoints = [
+    new THREE.Vector3(-3.1, 4.85, 0.55),  // 1. Eğrinin sol-üst dikey başlangıç ucu
+    new THREE.Vector3(-2.75, 2.55, 1.45), // 2. Dikey kavisli iniş
+    new THREE.Vector3(-1.85, 1.05, 2.45), // 3. Çizimdeki yumuşak alt kavis dirseği
+    new THREE.Vector3(-0.70, 1.45, 3.20), // 4. Tornadonun tabanından yatay kavisle cepheye dönüş
+    finalCameraPos.clone(),               // 5. Nihai kamera konumu (0.24, 2.65, 3.45)
+];
+const cameraCurve = new THREE.CatmullRomCurve3(cameraCurvePoints, false, "centripetal", 0.5);
+
+// Kameranın bakış hedefi (controls.target) tornadonun alttan yukarıya büyümesiyle senkron yükselir
+const targetCurve = new THREE.CatmullRomCurve3([
+    new THREE.Vector3(0.0, 0.12, 0.0),    // Başlangıçta zemindeki alt boru ucuna odaklanır
+    new THREE.Vector3(-0.15, 0.55, 0.0),  // Orta gövde oluşurken takip eder
+    new THREE.Vector3(-0.05, 1.05, 0.0),  // Üst huni açılırken yükselir
+    finalTargetPos.clone(),               // Nihai merkez (0.0, 1.35, 0.0)
+]);
+
+// Kamera Eğrisi Görselleştiricisi (İsteğe bağlı Tweakpane'den açılıp kapatılabilir)
+const curveGeometry = new THREE.BufferGeometry().setFromPoints(cameraCurve.getPoints(80));
+const curveMaterial = new THREE.LineBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.65 });
+const cameraCurveLine = new THREE.Line(curveGeometry, curveMaterial);
+cameraCurveLine.visible = false;
+scene.add(cameraCurveLine);
+
+const introState = {
+    progress: 0.0,
+    cameraT: 0.0,
+    duration: 4.2,
+    isPlaying: false,
+    showCurvePath: false,
+};
+
+let activeTimeline = null;
+
+function playIntroAnimation() {
+    if (activeTimeline) {
+        activeTimeline.kill();
+    }
+
+    introState.isPlaying = true;
+    introState.progress = 0.0;
+    introState.cameraT = 0.0;
+    material.uniforms.uIntroProgress.value = 0.0;
+
+    // OrbitControls'u giriş animasyonu süresince devre dışı bırak (çakışmayı önler)
+    controls.enabled = false;
+
+    // Başlangıç kamera ve hedef konumunu eğrinin 0. noktasına yerleştir
+    cameraCurve.getPointAt(0.0, camera.position);
+    targetCurve.getPointAt(0.0, controls.target);
+    camera.lookAt(controls.target);
+
+    activeTimeline = gsap.timeline({
+        onComplete: () => {
+            introState.isPlaying = false;
+            controls.enabled = true;
+        },
+    });
+
+    // 1. Kamera eğrisi boyunca ultra yumuşak (power2.inOut) hareket
+    activeTimeline.to(
+        introState,
+        {
+            cameraT: 1.0,
+            duration: introState.duration,
+            ease: "power2.inOut",
+            onUpdate: () => {
+                cameraCurve.getPointAt(introState.cameraT, camera.position);
+                targetCurve.getPointAt(introState.cameraT, controls.target);
+                camera.lookAt(controls.target);
+            },
+        },
+        0
+    );
+
+    // 2. Kamera hareketiyle birebir senkron şekilde tornadonun alttan yukarıya (0 -> kendi boyutu) büyümesi
+    activeTimeline.to(
+        material.uniforms.uIntroProgress,
+        {
+            value: 1.0,
+            duration: introState.duration * 0.95,
+            ease: "sine.inOut",
+        },
+        0.08
+    );
+}
+
+// Sayfa açıldığında giriş ve kamera curve animasyonunu otomatik başlat
+playIntroAnimation();
+
+/**
+ * Tweakpane Klasörleri ve Kontrolleri
+ */
+const introFolder = pane.addFolder({ title: "0. Giriş & Kamera Curve Animasyonu (GSAP)", expanded: true });
+introFolder.addBinding(introState, "duration", { min: 1.5, max: 10.0, step: 0.1, label: "Giriş Süresi (sn)" });
+introFolder.addBinding(material.uniforms.uIntroProgress, "value", { min: 0.0, max: 1.0, step: 0.01, label: "Oluşum (Alttan Üste)" });
+introFolder.addBinding(introState, "showCurvePath", { label: "Kamera Eğrisini Göster" }).on("change", (ev) => {
+    cameraCurveLine.visible = ev.value;
+});
+introFolder.addButton({ title: "Giriş Animasyonunu Tekrar Oynat" }).on("click", () => {
+    playIntroAnimation();
+});
+
+const hollowFolder = pane.addFolder({ title: "1. İç Boşluk (Göz) & Tepe Dağılımı", expanded: true });
+hollowFolder.addBinding(uniforms.uInnerHollow, "value", { min: 0.0, max: 1.5, step: 0.01, label: "İç Boşluk Çapı" });
+hollowFolder.addBinding(uniforms.uShellThickness, "value", { min: 0.05, max: 1.2, step: 0.01, label: "Duvar Kalınlığı" });
+hollowFolder.addBinding(uniforms.uTopHeightJitter, "value", { min: 0.0, max: 2.0, step: 0.01, label: "Tepe Rastgeleliği" }).on("change", (ev) => {
+    material.uniforms.uTopHeightJitter.value = ev.value;
+});
+
+const speedFolder = pane.addFolder({ title: "2. Hız, Yükseklik & Spawn İvmesi", expanded: true });
+speedFolder.addBinding(uniforms.uRotationSpeed, "value", { min: 0.05, max: 2.5, step: 0.01, label: "Taban Dönüş Hızı" });
+speedFolder.addBinding(uniforms.uTopSlowdown, "value", { min: 0.0, max: 0.92, step: 0.01, label: "Üst Yavaşlama" });
+speedFolder.addBinding(uniforms.uRandomSpeedVar, "value", { min: 0.0, max: 1.0, step: 0.01, label: "Rastgele Hız Farkı" });
+speedFolder.addBinding(uniforms.uSpawnBurst, "value", { min: 0.0, max: 3.5, step: 0.05, label: "Spawn Patlama Hızı" });
+speedFolder.addBinding(uniforms.uUpdraftSpeed, "value", { min: 0.0, max: 4.0, step: 0.05, label: "Yukarı Vakum" });
+
+const groundFolder = pane.addFolder({ title: "3. Alt Boru Zemin Hareketi", expanded: true });
+groundFolder.addBinding(uniforms.uWanderRadius, "value", { min: 0.0, max: 1.8, step: 0.01, label: "Zemin Gezinme Çapı" });
+groundFolder.addBinding(uniforms.uWanderSpeed, "value", { min: 0.0, max: 3.0, step: 0.01, label: "Gezinme Hızı" });
+groundFolder.addBinding(uniforms.uBendPower, "value", { min: 1.0, max: 5.0, step: 0.05, label: "Boru Esneme Üssü" });
+groundFolder.addBinding(uniforms.uWhipLag, "value", { min: 0.0, max: 5.0, step: 0.05, label: "Kamçı Gecikmesi" });
+groundFolder.addBinding(uniforms.uDebrisFlare, "value", { min: 0.0, max: 2.5, step: 0.05, label: "Zemin Enkaz Eteği" });
+
+const shapeFolder = pane.addFolder({ title: "4. Huni Boyutu & Görünüm", expanded: false });
+shapeFolder.addBinding(uniforms.uMinRadius, "value", { min: 0.01, max: 1.5, step: 0.01, label: "Alt Boru Darlığı" });
+shapeFolder.addBinding(uniforms.uMaxRadius, "value", { min: 2.0, max: 15.0, step: 0.05, label: "Üst Genişlik" });
+shapeFolder.addBinding(uniforms.uMaxHeight, "value", { min: 4.0, max: 15.0, step: 0.1, label: "Yükseklik" });
+shapeFolder.addBinding(uniforms.noiseStrength, "value", { min: 0.0, max: 1.0, step: 0.01, label: "Türbülans Gücü" });
+shapeFolder.addBinding(material.uniforms.uSize, "value", { min: 1.0, max: 25.0, step: 0.1, label: "Parçacık Boyutu" });
+
+const interactionState = {
+    mouseControl: false,
+    showGrid: false,
+    colorMode: 1,
+};
+
+shapeFolder.addBinding(interactionState, "mouseControl", { label: "Fareyle Zeminde Sürükle" }).on("change", (ev) => {
+    uniforms.uUseMouseTarget.value = ev.value ? 1.0 : 0.0;
+});
+shapeFolder.addBinding(interactionState, "showGrid", { label: "Zemin Izgarası" }).on("change", (ev) => {
+    groundGrid.visible = ev.value;
+});
+shapeFolder.addBinding(interactionState, "colorMode", {
+    label: "Renk Modu",
+    options: {
+        "Klasik Beyaz": 0,
+        "Atmosferik Fırtına & Toz": 1,
+    },
+}).on("change", (ev) => {
+    material.uniforms.uColorMode.value = ev.value;
+});
+
+//? Fare ile Zemin Düzleminde (Y = 0) Alt Boruyu Yönlendirme
+const raycaster = new THREE.Raycaster();
+const pointer = new THREE.Vector2();
+const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+const intersectPoint = new THREE.Vector3();
+
+window.addEventListener("pointermove", (event) => {
+    if (!interactionState.mouseControl) return;
+    pointer.x = (event.clientX / sizes.width) * 2 - 1;
+    pointer.y = -(event.clientY / sizes.height) * 2 + 1;
+    raycaster.setFromCamera(pointer, camera);
+    if (raycaster.ray.intersectPlane(groundPlane, intersectPoint)) {
+        uniforms.uGroundTarget.value.set(
+            THREE.MathUtils.clamp(intersectPoint.x, -2.2, 2.2),
+            THREE.MathUtils.clamp(intersectPoint.z, -2.2, 2.2)
+        );
+    }
+});
+
+//? Animasyon Döngüsü
+const clock = new THREE.Clock();
+let previousTime = 0;
+
 const tick = () => {
-    //? Controls Update
-    controls.dampingFactor = 0.05;
-    controls.update();
+    stats.begin();
 
-    //? Animate Objects
-    clock.update();
-    let elapsedTime = clock.getElapsed();
-    let deltaTime = clock.getDelta();
-    deltaTime = Math.min(deltaTime, 0.1); // Limit delta time to avoid large jumps
-    elapsedTime = Math.min(elapsedTime, 1000); // Limit elapsed time to avoid large jumps
+    if (!introState.isPlaying) {
+        controls.dampingFactor = 0.05;
+        controls.update();
+    }
 
-    //? Update the GPU computation
-    positionVariable.material.uniforms.time.value = elapsedTime;
-    positionVariable.material.uniforms.delta.value = deltaTime;
+    const elapsedTime = clock.getElapsedTime();
+    const deltaTime = Math.min(elapsedTime - previousTime, 0.1);
+    previousTime = elapsedTime;
+
+    uniforms.time.value = elapsedTime;
+    uniforms.delta.value = deltaTime;
+    material.uniforms.uMaxHeight.value = uniforms.uMaxHeight.value;
+
     gpuCompute.compute();
 
-    // ? Update the particle positions from the GPU computation
-    material.uniforms.texturePosition.value = gpuCompute.getCurrentRenderTarget(positionVariable).texture;
+    material.uniforms.texturePosition.value =
+        gpuCompute.getCurrentRenderTarget(positionVariable).texture;
     material.uniforms.uTime.value = elapsedTime;
 
-
-    //? Render
     renderer.render(scene, camera);
+
+    stats.end();
     window.requestAnimationFrame(tick);
 };
 tick();
 
-
-
-//! Resize
+//! Ekran Boyutu Değişimi
 window.addEventListener("resize", () => {
-    // Update Sizes
     sizes.width = window.innerWidth;
     sizes.height = window.innerHeight;
 
-    // Update Camera
     camera.aspect = sizes.width / sizes.height;
     camera.updateProjectionMatrix();
 
-    // Pixel Ratio
     const pixelRatio = Math.min(window.devicePixelRatio, 2);
-    if (material && material.uniforms && material.uniforms.uPixelRatio) {
-        material.uniforms.uPixelRatio.value = pixelRatio;
-        console.log("Updated uPixelRatio to:", pixelRatio);
-    }
+    material.uniforms.uPixelRatio.value = pixelRatio;
 
-    // Update Renderer
     renderer.setSize(sizes.width, sizes.height);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setPixelRatio(pixelRatio);
 });
